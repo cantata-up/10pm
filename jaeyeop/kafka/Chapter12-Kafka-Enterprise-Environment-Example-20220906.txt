@@ -1,0 +1,171 @@
+12.1 엔터프라이즈용 카프카 아키텍처의 개요
+엔터프라이즈 환경에서는 장애 복구 등을 위해 하나 이상의 데이터 센터를 운영, 관리
+카프카 클러스터도 다수의 데이터 센터에 배치
+카프카와 카프카 간의 데이터 리플리케이션 필수
+미러 메이커 2.0
+
+
+일대일 미러링의 경우, 업스트림 카프카와 다운스트림 카프카 사이에 리플리케이션이 필요한 경우
+다대일 미러링의 경우, 여러 데이터 센터마다 카프카가 존재하고 중앙에 있는 카프카로 데이터를 모으기 위해 피를리케이션을 사용한 경우
+
+
+
+이렇게 리플리케이션한 다운스트림 카프카는 실시간 처리와 분석을 위해 별도의 애플리케이션에 적재하여 사용
+다운스트림 카프카의 토픽을 컨슘하여, 각 애플리케이션을 연동함
+Hadoop, es, aws s3, hbase 등 카프카와 연동하여 많이 사용
+
+
+
+현장 실무에서 흔히 쓰이는 카프카 엔터프라이즈 환경 예제
+프로듀서1 -> 업스트림 카프카로 Message를 Produce 함(스키마 레지스트리 사용)
+업스트림 카프카 -> 컨슈머-1로 Message를 Consume 함(스키마 레지스트리 사용)
+컨슈머-1의 경우 실시간으로 데이터를 처리하는 업무를 진행
+카프카 커넥트 미러메이커2.0을 이용해 업스트림 카프카 -> 다운스트림 카프카로 카프카 리플리케이션이 진행된다.
+다운스트림 카프카 -> 컨슈머2로 Message를 Consume함(스키마 레지스트리 사용)
+컨슈머-2의 경우 데이터 분석 을 처리하는 업무를 진행
+Consume한 Message를 엘라스틱서치와 연결하고 키바나에 연결하여 사용자가 볼 수 있는 형태로 제공한다.
+업스트림/다운스트림 카프카는 Exporter를 통해 프로메테우스에게 매트릭 정보를 제공한다.
+프로메테우스와 그라파나를 연결하여 사용자가 모니터링을 하기 쉽게 한다.
+업스트림/다운스트림 카프카의 관리는 CMAK을 통해 진행한다.
+
+
+
+
+
+12.2 엔터프라이즈용 카프카의 환경 구성
+실제 12.1에서 설계한 엔터프라이즈용 환경을 구성을 보여주며 설명함
+
+실습을 위해 총 6대의 서버로 진행
+실제 운영 환경에서는 되도록 하나의 서버에는 하나의 애플리케이션만 실행할 것을 권장하지만, 실습 진행은 그림 12-4 환경을 따름.
+각 애플리케이션이 최대한 분산되도록 설계
+실습에 필요한 서버당 필요한 애플리케이션 배치 구성도
+주키퍼는 1개의 앙상블만 구성하여 사용(3)
+업스트림 카프카(3), 다운스트림 카프카(3)
+스키마 레지스트리(1)
+CMAK(1)
+프로메테우스(1)/그라파나(1)
+엘라스틱서치(1)/키바나(1)
+카프카 커넥트(미러 메이커 2.0) (3)
+
+카프카 커넥트가 업스트림 카프카가 아니라 다운스트림 카프카와 위치하고 있는 이유
+카프카와 카프카 간의 미러링에서 가장 중요한 것은 메시지의 무손실
+업스트림/다운스트림 카프카 간의 미러링 동작은 실제 업스트 카프카의 토픽에서 메시지를 읽고 업스트림 카프카에서 읽은 메시지를 다운스트림 카프카의 토픽으로 전송함
+다시 말해 카프카에서 미러링 동작은 프로듀서 + 컨슈머 동작으로 이뤄짐
+
+
+이 경우, 업스트림 카프카에서 Consume은 Local에서 이루어지는 반면 다운스트림으로 Produce는 Network에서 이루어진다.
+Producer가 메시지 전송 시 네트워크 장애 상황에 노출되는 경우 일부 메시지가 유실될 가능성이 높다.
+
+
+이 경우, 업스트림 카프카에서 Consume은 Network에서 이루어지고 다운스트림으로 Produce는 Local에서 이루어진다.
+만약 Network 구간에서 문제가 발생해도 컨슈머의 오프셋을 장애 전 시점으로 변경한다면 일부 메시지의 중복은 발생하지만 메시지 유실은 되지 않는다.
+프로듀서는 컨슈머보다 네트워크 장애에 더욱 민감하므로 다운스트림 카프카와 가까운 위치에 배치하는 것이 중요함
+
+12.3 엔터프라이즈용 카프카의 운영 실습
+실제 운영 실습 진행
+프로듀서-1은 업스트림 카프카의 실습용 토픽으로 메시지를 전송
+카프카 커넥트의 미러 메이커는 업스트림 카프카의 실습용 토픽을 다운스트림 카프카로 미러링
+컨슈머-1을 이용해 업스트림 카프카의 실습용 토픽을 컨슘
+컨슈머-2를 이용해 다운스트림 카프카의 미러링된 토픽에서 메시지를 읽은 후 엘라스틱서치로 전송
+키바나를 이용해 엘라스틱서치에 메시지가 저장됐는지 확인
+스키마 변경 후 다시 한번 메시지를 전송해 위 과정을 반복하여 확인
+모든 카프카 메트릭은 프로메테우스로 저장, 그라파나 대시보드를 이용해 모니터링 확인
+
+12.3.1 CMAK을 이용한 토픽 생성
+CMAK
+Cluster Manager for Apache Kafka, previously known as Kafka Manager
+Kafka Manager는 yahoo에서 제작한 GUI 기반 카프카 관리 도구로, 웹 환경에서 클러스터, 토픽 등의 생성 및 변경, consumer group 확인 등의 작업을 웹 환경에서 확인하고 진행할 수 있다. 사실 CLI 환경에서도 Kafka를 관리할 수 있으나 편의적인 측면에서 많은 기업들이 kafka-manager 를 도입하여 운용중이다.
+출처: https://server-engineer.tistory.com/759
+CMAK과 카프카 클러스터를 연동하여 실습용 토픽을 생성하는 과정
+실제로 실무 prod 환경에서 사용함
+관리 도구에 장단점이 존재하여 환경을 고려하여 선택해서 사용
+
+12.3.2 카프카 커넥트 설정
+카프카 커텍트가 잘 실행되어 있는지 다음 명령어를 통해 확인 가능
+$ curl http://peter-zk01.foo.bar:8083/connectors
+미러메이커 소스 커텍터 등록
+
+
+미러메이커 소스커텍터 정의
+source, 업스트림 카프카 / target, 다운스트림 카프카
+
+
+실제 미러메이커 2.0에서는 Alias를 사용하여 Active-Active 클러스터 구성이 가능함
+CMAK에서 확인하면 다운스트림 카프카 내 src.{topic}이 정의되어 있는데 미러메이커를 통해 업스트림의 {topic}이 다운스트림 카프카 src.{topic}과 동기화되는 것을 확인할 수 있음
+
+12.3.3 모니터링 환경 구성
+
+Exporter를 각 Kafka Broker 에 설치하여 Metrics 정보를 Prometheus로 전송
+Prometheus Metrics는 Pull 방식
+그라파나에서 time-series database 형태로 데이터를 확인가능함
+임계치 및 장애발생에 대한 사용자 알람이나 메신저 webhook 기능도 제공함
+https://docs.lenses.io/3.1/install_setup/monitoring/index.html
+
+12.3.4 메시지 전송과 확인
+해당 클라이언트들과 스키마 레지스트리를 이용해 메시지를 보내고 받는 실습 진행
+Avro를 활용해 스키마 정의
+예제 12-1 파이썬 코드로 작성한 업스트림 카프카로 메시지를 전송하는 파이썬 프로듀서 예제(producer나_kafka-1_ vl.py)
+
+#avro, names, random 관련 모듈 임포트
+from confluent_kafka import avro
+from confluent_kafka.avro import AvroProducer
+import names
+import random
+
+#스키마 정의
+value_schema_str = """
+{"namespace": "student.avro",
+ "type": "record",
+ "doc": "This is an example of Avro.",
+ "name": "Student",
+ "fields": [
+{"name": "name", "type": ["null", "string"], "default": null, "doc": "Name of the student"},
+{"name"： "class", "type": "tnt", "default"： 1, "doc": "Class of the student"}
+ ]
+}
+"""
+
+#밸류 스키마로드
+value_schema = avro.loads(value_schema_str)
+
+#전송 결과확인
+def delivery_report(err, msg):
+"”" Called once for each message produced to indicate delivery result.
+Triggered by poll() or flush(). """
+if err is not None:
+print('Message delivery failed: {}'.format(err))
+else：
+print('Message delivered to {} [{}]'.format(msg.topic(), msg.offset))))
+
+#AvroProducer 속성 정의
+avroProducer = AvroProducer({
+‘bootstrap.servers': ‘peter-kafkaOl.foo.bar,peter-kafka02.foo.bar,peter-kafka03. foo.bar',
+'on_delivery': deltvery_report,
+'schema.registry.url': 'http://peter-kafka03.foo.bar:8081'
+}, default_value_schema그value_schema)
+
+#메시지 전송
+for x in range(100):
+value = {"name": names.get_first_name(), "class": random.randint( 1,5)} # 전송할 메시지
+avroProducer.produce(topic='peter-avroOl-kafkal', value=value)
+avroProducer.flush()
+
+
+
+
+예제12-1. 업스트림 카프카로 메시지를 전송
+예제12-2. 업스트림 카프카에서 메시지를 컨슘
+예제12-3. 다운스트림 카프카에서 메시지를 읽어 엘라스틱서치로 전송하는 컨슈머
+예제12-4. 전화번호와 나이를 추가한 스키마로 업스트림 카프카의 메시지를 읽는 컨슈머
+예제12-5. 전화번호와 나이를 추가한 스키마로 업스트림 카프카로 메시지를 전송하는 프로듀서
+예제12-6. 전화번호와 나이를 추가한 스키마로 다운스트림 카프카에서 메시지를 읽고 엘라스틱서치로 전송하는 컨슈머
+스키마 레지스트리 변경 내용 확인
+curl http://peter-kafka03.foo.bar:8081/schemas | python -m json.tool
+실제 전화번호와 나이가 추가된 version이 추가되어 존재함
+기본값이 지정된 필드 추가, BACKWARD 호환성
+예제에서도 Consumer -> Producer 로 변경 확인
+
+
+
+
+실제 12.3.4에서 진행한 실습 과정
